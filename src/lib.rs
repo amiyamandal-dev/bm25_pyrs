@@ -29,39 +29,51 @@ struct BM25Okapi {
 
 fn calc_idf(b: &mut BM25Okapi, nd: &HashMap<String, f64>) {
     let mut idf_sum = 0.0;
-    let mut negative_idfs: Vec<_> = Vec::new();
+    let mut negative_idfs = Vec::new();
+
+    // Reserve capacity to avoid reallocations
+    let mut idf_updates = HashMap::with_capacity(nd.len());
 
     for (word, freq) in nd.into_iter() {
         let idf = f64::ln(b.corpus_size - freq + 0.5) - f64::ln(freq + 0.5);
-        b.idf.insert(word.clone(), idf);
+        idf_updates.insert(word.clone(), idf);
         idf_sum += idf;
         if idf < 0.0 {
             negative_idfs.push(word.clone());
         }
     }
+    // Update idf in b with idf_updates
+    b.idf.extend(idf_updates);
+
     b.average_idf = idf_sum / b.idf.len() as f64;
     let eps = b.epsilon * b.average_idf;
-    for i in negative_idfs.iter() {
-        b.idf.insert(i.clone(), eps);
+
+    for i in negative_idfs {
+        // Update negative idfs in b.idf directly
+        *b.idf.entry(i).or_insert(eps) = eps;
     }
 }
 
-fn initialize(b: &mut BM25Okapi, corpus: &Vec<Vec<String>>) -> HashMap<String, f64> {
+fn initialize(b: &mut BM25Okapi, corpus: &[Vec<String>]) -> HashMap<String, f64> {
     let mut nd: HashMap<String, f64> = HashMap::new();
     let mut num_doc = 0;
+    // Reserve capacity to avoid reallocations
+    b.doc_len.reserve(corpus.len());
+    b.doc_freqs.reserve(corpus.len());
 
-    for doc in corpus.iter() {
+    for doc in corpus {
         b.doc_len.push(doc.len());
         num_doc += doc.len();
 
         let mut frequencies = HashMap::new();
-        for word in doc.iter() {
+        for word in doc {
             *frequencies.entry(word.to_string()).or_insert(0) += 1;
         }
-        b.doc_freqs.push(frequencies.clone());
-        for (word, _) in frequencies.into_iter() {
-            *nd.entry(word).or_insert(0.0) += 1.0;
+
+        for (word, _) in &frequencies {
+            *nd.entry(word.to_string()).or_insert(0.0) += 1.0;
         }
+        b.doc_freqs.push(frequencies);
         b.corpus_size += 1.0;
     }
 
