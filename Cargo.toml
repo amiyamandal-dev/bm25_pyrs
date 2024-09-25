@@ -9,6 +9,5 @@ name = "bm25_pyrs"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = "0.20.2"
+pyo3 = { version = "0.20", features = ["extension-module"] }
 rayon = "1.1"
-dashmap = "5.5"

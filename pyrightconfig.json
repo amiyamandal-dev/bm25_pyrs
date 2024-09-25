@@ -1,0 +1,10 @@
+{
+  "venv": "max2",
+  "venvPath": "/opt/miniconda3/envs",
+  "pythonPath": "/opt/miniconda3/envs/max2/bin/python",
+  "ignore": [
+    "**/node_modules",
+    "**/__pycache__"
+  ],
+  "typeCheckingMode": "basic"
+}

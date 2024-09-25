@@ -1,145 +1,332 @@
-use std::collections::HashMap;
-
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use rayon::prelude::*;
+use std::collections::HashMap;
+use std::sync::Arc;
 
+/// A Rust implementation of BM25Okapi optimized for multicore processing.
 #[pyclass]
-struct BM25Okapi {
-    #[pyo3(get)]
-    corpus_size: f64,
-    #[pyo3(get)]
-    avgdl: f64,
-    #[pyo3(get)]
-    doc_freqs: Vec<HashMap<String, usize>>,
-    #[pyo3(get)]
-    doc_len: Vec<usize>,
-    #[pyo3(get)]
-    idf: HashMap<String, f64>,
-    #[pyo3(get)]
+pub struct BM25Okapi {
+    #[pyo3(get, set)]
     k1: f64,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     b: f64,
-    #[pyo3(get)]
-    delta: f64,
-    #[pyo3(get)]
-    average_idf: f64,
-    #[pyo3(get)]
+    #[pyo3(get, set)]
     epsilon: f64,
-}
-
-fn calc_idf(b: &mut BM25Okapi, nd: &HashMap<String, f64>) {
-    let mut idf_sum = 0.0;
-    let mut negative_idfs = Vec::new();
-
-    // Reserve capacity to avoid reallocations
-    let mut idf_updates = HashMap::with_capacity(nd.len());
-
-    for (word, freq) in nd.into_iter() {
-        let idf = f64::ln(b.corpus_size - freq + 0.5) - f64::ln(freq + 0.5);
-        idf_updates.insert(word.clone(), idf);
-        idf_sum += idf;
-        if idf < 0.0 {
-            negative_idfs.push(word.clone());
-        }
-    }
-    // Update idf in b with idf_updates
-    b.idf.extend(idf_updates);
-
-    b.average_idf = idf_sum / b.idf.len() as f64;
-    let eps = b.epsilon * b.average_idf;
-
-    for i in negative_idfs {
-        // Update negative idfs in b.idf directly
-        *b.idf.entry(i).or_insert(eps) = eps;
-    }
-}
-
-fn initialize(b: &mut BM25Okapi, corpus: &[Vec<String>]) -> HashMap<String, f64> {
-    let mut nd: HashMap<String, f64> = HashMap::new();
-    let mut num_doc = 0;
-    // Reserve capacity to avoid reallocations
-    b.doc_len.reserve(corpus.len());
-    b.doc_freqs.reserve(corpus.len());
-
-    for doc in corpus {
-        b.doc_len.push(doc.len());
-        num_doc += doc.len();
-
-        let mut frequencies = HashMap::new();
-        for word in doc {
-            *frequencies.entry(word.to_string()).or_insert(0) += 1;
-        }
-
-        for (word, _) in &frequencies {
-            *nd.entry(word.to_string()).or_insert(0.0) += 1.0;
-        }
-        b.doc_freqs.push(frequencies);
-        b.corpus_size += 1.0;
-    }
-
-    b.avgdl = num_doc as f64 / b.corpus_size;
-    nd
+    #[pyo3(get, set)]
+    corpus_size: usize,
+    #[pyo3(get, set)]
+    avgdl: f64,
+    #[pyo3(get, set)]
+    doc_freqs: Vec<HashMap<String, usize>>,
+    idf: Arc<HashMap<String, f64>>, // Arc for thread-safe shared access
+    #[pyo3(get, set)]
+    doc_len: Vec<usize>,
+    tokenizer: Option<Py<PyAny>>,
 }
 
 #[pymethods]
 impl BM25Okapi {
+    /// Constructor for BM25Okapi
     #[new]
-    fn new(corpus: Vec<Vec<String>>, epsilon: f64) -> Self {
+    pub fn new(
+        py: Python,
+        corpus: Vec<String>,
+        tokenizer: Option<&PyAny>,
+        k1: Option<f64>,
+        b: Option<f64>,
+        epsilon: Option<f64>,
+    ) -> PyResult<Self> {
+        let k1 = k1.unwrap_or(1.5);
+        let b = b.unwrap_or(0.75);
+        let epsilon = epsilon.unwrap_or(0.25);
+
+        let tokenizer = tokenizer.map(|tokenizer| tokenizer.into());
+
+        // Initialize BM25 structure without tokenization
         let mut bm25 = BM25Okapi {
-            corpus_size: 0.0,
+            k1,
+            b,
+            epsilon,
+            corpus_size: 0,
             avgdl: 0.0,
             doc_freqs: Vec::new(),
+            idf: Arc::new(HashMap::new()),
             doc_len: Vec::new(),
-            idf: HashMap::new(),
-            k1: 1.5,
-            b: 0.75,
-            delta: 0.5,
-            average_idf: 0.0,
-            epsilon,
+            tokenizer,
         };
-        let nd = initialize(&mut bm25, &corpus);
-        calc_idf(&mut bm25, &nd);
-        bm25
+
+        // Tokenize corpus if tokenizer is provided
+        let tokenized_corpus = if bm25.tokenizer.is_some() {
+            // Tokenization with Python tokenizer must be sequential due to GIL limitations
+            bm25.tokenize_corpus(py, &corpus)?
+        } else {
+            // Parallel tokenization without Python involvement
+            corpus
+                .par_iter()
+                .map(|doc| doc.split_whitespace().map(|s| s.to_string()).collect())
+                .collect()
+        };
+
+        // Initialize BM25 structures
+        let nd = bm25.initialize(tokenized_corpus);
+        let idf_map = bm25.calc_idf(nd);
+        bm25.idf = Arc::new(idf_map);
+
+        Ok(bm25)
     }
 
-    fn get_scores(&mut self, query: Vec<String>) -> Vec<f64> {
-        let mut scores: Vec<f64> = vec![0.0; self.corpus_size as usize];
-        let doc_len = &self.doc_len;
-        for q in query.iter() {
-            let q_freq: Vec<f64> = self
-                .doc_freqs
-                .par_iter() // Parallel iteration over documents
-                .map(|doc| doc.get(q).map_or(0.0, |&t| t as f64)) // Get frequency for term q in each document
-                .collect(); // Collect into a vector
-
-            let idf_score = match self.idf.get(q) {
-                Some(t) => *t,
-                None => 0.0,
-            };
-            scores
-                .par_iter_mut()
-                .enumerate() // Parallel iteration over scores
-                .for_each(|(i, score)| {
-                    let freq = q_freq[i];
-                    let doc_len_i = doc_len[i] as f64;
-                    let bm25_score = idf_score
-                        * (freq * (self.k1 + 1.0)
-                            / (freq + self.k1 * (1.0 - self.b + self.b * doc_len_i / self.avgdl)));
-                    *score += bm25_score; // Update the score
-                });
+    /// Calculates BM25 scores for all documents given a query
+    pub fn get_scores(&self, _py: Python, query: Vec<String>) -> PyResult<Vec<f64>> {
+        if self.corpus_size == 0 {
+            return Ok(vec![]);
         }
-        scores
+
+        // Prepare shared data
+        let idf = Arc::clone(&self.idf);
+        let doc_freqs = &self.doc_freqs;
+        let doc_len = &self.doc_len;
+        let avgdl = self.avgdl;
+        let k1 = self.k1;
+        let b = self.b;
+
+        // Create a mapping from query terms to their idf values
+        let query_terms: Vec<(&String, &f64)> =
+            query.iter().filter_map(|q| idf.get_key_value(q)).collect();
+        if query_terms.is_empty() {
+            // None of the query terms are in the corpus
+            return Ok(vec![0.0; self.corpus_size]);
+        }
+
+        // Compute scores in parallel over documents
+        let scores: Vec<f64> = (0..self.corpus_size)
+            .into_par_iter()
+            .map(|i| {
+                let mut score = 0.0;
+                let doc_freq = &doc_freqs[i];
+                let dl = doc_len[i] as f64;
+                let normalization = k1 * (1.0 - b + b * dl / avgdl);
+
+                for &(q, &idf_q) in &query_terms {
+                    let freq = *doc_freq.get(q).unwrap_or(&0) as f64;
+                    if freq > 0.0 {
+                        let numerator = freq * (k1 + 1.0);
+                        let denominator = freq + normalization;
+                        score += idf_q * (numerator / denominator);
+                    }
+                }
+                score
+            })
+            .collect();
+
+        Ok(scores)
+    }
+
+    /// Calculates BM25 scores for a batch of documents given a query
+    pub fn get_batch_scores(
+        &self,
+        _py: Python,
+        query: Vec<String>,
+        doc_ids: Vec<usize>,
+    ) -> PyResult<Vec<f64>> {
+        if doc_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Prepare shared data
+        let idf = Arc::clone(&self.idf);
+        let doc_freqs = &self.doc_freqs;
+        let doc_len = &self.doc_len;
+        let avgdl = self.avgdl;
+        let k1 = self.k1;
+        let b = self.b;
+
+        // Create a mapping from query terms to their idf values
+        let query_terms: Vec<(&String, &f64)> =
+            query.iter().filter_map(|q| idf.get_key_value(q)).collect();
+        if query_terms.is_empty() {
+            // None of the query terms are in the corpus
+            return Ok(vec![0.0; doc_ids.len()]);
+        }
+
+        // Compute scores in parallel over specified document IDs
+        let scores: Vec<f64> = doc_ids
+            .par_iter()
+            .map(|&di| {
+                if di >= doc_freqs.len() {
+                    // Invalid document ID
+                    return 0.0;
+                }
+                let mut score = 0.0;
+                let doc_freq = &doc_freqs[di];
+                let dl = doc_len[di] as f64;
+                let normalization = k1 * (1.0 - b + b * dl / avgdl);
+
+                for &(q, &idf_q) in &query_terms {
+                    let freq = *doc_freq.get(q).unwrap_or(&0) as f64;
+                    if freq > 0.0 {
+                        let numerator = freq * (k1 + 1.0);
+                        let denominator = freq + normalization;
+                        score += idf_q * (numerator / denominator);
+                    }
+                }
+                score
+            })
+            .collect();
+
+        Ok(scores)
+    }
+
+    /// Retrieves the top N documents for a given query
+    pub fn get_top_n(
+        &self,
+        py: Python,
+        query: Vec<String>,
+        documents: Vec<String>,
+        n: Option<usize>,
+    ) -> PyResult<Vec<String>> {
+        let n = n.unwrap_or(5);
+        if self.corpus_size != documents.len() {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "The documents given don't match the index corpus!",
+            ));
+        }
+
+        let scores = self.get_scores(py, query)?;
+
+        // Create a vector of (index, score)
+        let mut idx_scores: Vec<(usize, f64)> = scores.into_iter().enumerate().collect();
+
+        // Sort by score in descending order
+        idx_scores.par_sort_unstable_by(|a, b| {
+            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        // Take top n indices
+        let top_n_indices: Vec<usize> = idx_scores.iter().take(n).map(|(i, _)| *i).collect();
+
+        // Collect the top N documents
+        let top_n = top_n_indices
+            .into_iter()
+            .map(|i| documents[i].clone())
+            .collect();
+
+        Ok(top_n)
     }
 }
 
-#[pyfunction]
-fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
-    Ok((a + b).to_string())
+// Implement internal methods outside of #[pymethods]
+impl BM25Okapi {
+    /// Tokenizes the corpus using the provided tokenizer
+    pub fn tokenize_corpus(&self, py: Python, corpus: &Vec<String>) -> PyResult<Vec<Vec<String>>> {
+        let tokenizer_py = match &self.tokenizer {
+            Some(tk) => tk,
+            None => return Ok(vec![]),
+        };
+
+        // Sequential tokenization due to GIL requirements
+        let mut tokenized_corpus = Vec::with_capacity(corpus.len());
+        for doc in corpus {
+            let tokens: Vec<String> = tokenizer_py
+                .call1(py, (doc,))
+                .expect("Tokenizer failed to execute")
+                .extract(py)
+                .expect("Failed to extract tokens");
+            tokenized_corpus.push(tokens);
+        }
+
+        Ok(tokenized_corpus)
+    }
+
+    /// Initializes document frequencies and other metrics
+    pub fn initialize(&mut self, corpus: Vec<Vec<String>>) -> HashMap<String, usize> {
+        use rayon::prelude::*;
+        use std::sync::Mutex;
+
+        let corpus_size = corpus.len();
+        let avgdl =
+            corpus.par_iter().map(|doc| doc.len()).sum::<usize>() as f64 / corpus_size as f64;
+
+        // Shared data structures protected by Mutex for thread-safe mutation
+        let nd = Mutex::new(HashMap::new());
+        let doc_freqs = Mutex::new(Vec::with_capacity(corpus_size));
+        let doc_len = Mutex::new(Vec::with_capacity(corpus_size));
+
+        // Parallel processing of documents
+        corpus.into_par_iter().for_each(|document| {
+            let doc_length = document.len();
+
+            // Calculate frequencies using a local HashMap
+            let frequencies = document.iter().fold(HashMap::new(), |mut freq, word| {
+                *freq.entry(word.clone()).or_insert(0) += 1;
+                freq
+            });
+
+            // Update global data structures
+            {
+                let mut nd_lock = nd.lock().unwrap();
+                for word in frequencies.keys() {
+                    *nd_lock.entry(word.clone()).or_insert(0) += 1;
+                }
+            }
+            {
+                let mut doc_freqs_lock = doc_freqs.lock().unwrap();
+                doc_freqs_lock.push(frequencies);
+            }
+            {
+                let mut doc_len_lock = doc_len.lock().unwrap();
+                doc_len_lock.push(doc_length);
+            }
+        });
+
+        self.corpus_size = corpus_size;
+        self.avgdl = avgdl;
+        self.doc_freqs = doc_freqs.into_inner().unwrap();
+        self.doc_len = doc_len.into_inner().unwrap();
+
+        nd.into_inner().unwrap()
+    }
+
+    /// Calculates the inverse document frequency (IDF)
+    pub fn calc_idf(&self, nd: HashMap<String, usize>) -> HashMap<String, f64> {
+        // Preallocate HashMap with expected size
+        let mut idf: HashMap<String, f64> = HashMap::with_capacity(nd.len());
+        let mut idf_sum = 0.0;
+        let mut negative_idfs = Vec::new();
+
+        // Compute IDF for each term
+        for (word, freq) in nd.iter() {
+            // Adding 0.5 to numerator and denominator for smoothing
+            let idf_val =
+                ((self.corpus_size as f64 - *freq as f64 + 0.5) / (*freq as f64 + 0.5)).ln();
+            idf.insert(word.clone(), idf_val);
+            idf_sum += idf_val;
+            if idf_val < 0.0 {
+                negative_idfs.push(word.clone());
+            }
+        }
+
+        // Calculate average IDF
+        let average_idf = if !idf.is_empty() {
+            idf_sum / idf.len() as f64
+        } else {
+            0.0
+        };
+
+        let eps = self.epsilon * average_idf;
+
+        // Apply flooring to negative IDF values
+        for word in negative_idfs {
+            idf.insert(word, eps);
+        }
+
+        idf
+    }
 }
 
+/// A Python module implemented in Rust.
 #[pymodule]
-fn bm25_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
+pub fn bm25_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<BM25Okapi>()?;
     Ok(())
 }
