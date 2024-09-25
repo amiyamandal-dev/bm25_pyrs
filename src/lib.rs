@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// A Rust implementation of BM25Okapi optimized for multicore processing.
 #[pyclass]
@@ -290,21 +290,37 @@ impl BM25Okapi {
     /// Calculates the inverse document frequency (IDF)
     pub fn calc_idf(&self, nd: HashMap<String, usize>) -> HashMap<String, f64> {
         // Preallocate HashMap with expected size
-        let mut idf: HashMap<String, f64> = HashMap::with_capacity(nd.len());
-        let mut idf_sum = 0.0;
-        let mut negative_idfs = Vec::new();
+        let idf: Arc<Mutex<HashMap<String, f64>>> =
+            Arc::new(Mutex::new(HashMap::with_capacity(nd.len())));
+        let idf_sum = Arc::new(Mutex::new(0.0));
+        let negative_idfs = Arc::new(Mutex::new(Vec::new()));
 
-        // Compute IDF for each term
-        for (word, freq) in nd.iter() {
+        // Compute IDF for each term in parallel
+        nd.par_iter().for_each(|(word, freq)| {
             // Adding 0.5 to numerator and denominator for smoothing
             let idf_val =
                 ((self.corpus_size as f64 - *freq as f64 + 0.5) / (*freq as f64 + 0.5)).ln();
-            idf.insert(word.clone(), idf_val);
-            idf_sum += idf_val;
+
+            // Lock the mutexes to update values
+            let mut idf_guard = idf.lock().unwrap();
+            idf_guard.insert(word.clone(), idf_val);
+
+            let mut idf_sum_guard = idf_sum.lock().unwrap();
+            *idf_sum_guard += idf_val;
+
             if idf_val < 0.0 {
-                negative_idfs.push(word.clone());
+                let mut negative_idfs_guard = negative_idfs.lock().unwrap();
+                negative_idfs_guard.push(word.clone());
             }
-        }
+        });
+
+        // Extract values from Mutexes
+        let mut idf = Arc::try_unwrap(idf).unwrap().into_inner().unwrap();
+        let idf_sum = Arc::try_unwrap(idf_sum).unwrap().into_inner().unwrap();
+        let negative_idfs = Arc::try_unwrap(negative_idfs)
+            .unwrap()
+            .into_inner()
+            .unwrap();
 
         // Calculate average IDF
         let average_idf = if !idf.is_empty() {
@@ -328,5 +344,6 @@ impl BM25Okapi {
 #[pymodule]
 pub fn bm25_pyrs(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<BM25Okapi>()?;
+    m.add_class::<bm25l::BM25L>()?;
     Ok(())
 }
