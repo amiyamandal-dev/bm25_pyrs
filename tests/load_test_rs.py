@@ -2,7 +2,7 @@ import time
 import random
 import string
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from bm25_pyrs import BM25Okapi  # Ensure this module is correctly built and accessible
+from bm25_pyrs.bm25_pyrs import BM25Okapi  # Ensure this module is correctly built and accessible
 from collections import defaultdict
 
 random.seed(42)

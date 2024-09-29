@@ -4,27 +4,27 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// BM25L structure with necessary fields
+/// BM25Okapi structure with necessary fields
 #[pyclass]
-pub struct BM25L {
+pub struct BM25Okapi {
     #[pyo3(get)]
     k1: f64,
     #[pyo3(get)]
     b: f64,
     #[pyo3(get)]
-    delta: f64,
+    epsilon: f64,
     #[pyo3(get)]
     corpus_size: usize,
     #[pyo3(get)]
     avgdl: f64,
-    doc_freqs: Arc<Vec<HashMap<String, usize>>>,
-    idf: Arc<HashMap<String, f64>>,
-    doc_len: Arc<Vec<usize>>,
-    tokenizer: Option<Py<PyAny>>,
+    doc_freqs: Arc<Vec<HashMap<String, usize>>>, // Wrapped in Arc for shared read-only access
+    idf: Arc<HashMap<String, f64>>,              // IDF values
+    doc_len: Arc<Vec<usize>>,                    // Document lengths
+    tokenizer: Option<Py<PyAny>>,                // Optional Python tokenizer
 }
 
 #[pymethods]
-impl BM25L {
+impl BM25Okapi {
     #[new]
     pub fn new(
         py: Python,
@@ -32,18 +32,18 @@ impl BM25L {
         tokenizer: Option<&PyAny>,
         k1: Option<f64>,
         b: Option<f64>,
-        delta: Option<f64>,
+        epsilon: Option<f64>,
     ) -> PyResult<Self> {
         let k1 = k1.unwrap_or(1.5);
         let b = b.unwrap_or(0.75);
-        let delta = delta.unwrap_or(0.5); // Default delta value for BM25L
+        let epsilon = epsilon.unwrap_or(0.25);
 
-        let tokenizer = tokenizer.map(|tokenizer| tokenizer.into());
+        let tokenizer = tokenizer.map(|tk| tk.into());
 
-        let mut bm25 = BM25L {
+        let mut bm25 = BM25Okapi {
             k1,
             b,
-            delta,
+            epsilon,
             corpus_size: 0,
             avgdl: 0.0,
             doc_freqs: Arc::new(Vec::new()),
@@ -52,10 +52,12 @@ impl BM25L {
             tokenizer,
         };
 
-        // Tokenize corpus
+        // Tokenize the corpus
         let tokenized_corpus = if let Some(ref tokenizer_py) = bm25.tokenizer {
+            // Sequential tokenization due to GIL
             bm25.tokenize_corpus(py, &corpus)?
         } else {
+            // Parallel tokenization
             corpus
                 .par_iter()
                 .map(|doc| doc.split_whitespace().map(|s| s.to_lowercase()).collect())
@@ -71,7 +73,11 @@ impl BM25L {
 
         // Initialize structures
         let (nd, doc_freqs, doc_len, avgdl) = bm25.initialize(tokenized_corpus);
+
+        // Calculate IDF
         let idf_map = bm25.calc_idf(nd);
+
+        // Update the BM25Okapi instance
         bm25.idf = Arc::new(idf_map);
         bm25.doc_freqs = Arc::new(doc_freqs);
         bm25.doc_len = Arc::new(doc_len);
@@ -80,50 +86,49 @@ impl BM25L {
         Ok(bm25)
     }
 
-    /// Calculates BM25L scores for a given query
+    /// Calculates BM25 scores for all documents given a query
     pub fn get_scores(&self, query: Vec<String>) -> PyResult<Vec<f64>> {
         if self.corpus_size == 0 {
             return Ok(vec![]);
         }
 
+        // Shared data
         let idf = Arc::clone(&self.idf);
         let doc_freqs = Arc::clone(&self.doc_freqs);
         let doc_len = Arc::clone(&self.doc_len);
         let avgdl = self.avgdl;
         let k1 = self.k1;
         let b = self.b;
-        let delta = self.delta;
 
+        // Precompute query term IDFs and filter out terms not in the corpus
         let query_terms: Vec<(&String, f64)> = query
             .iter()
             .filter_map(|q| idf.get(q).map(|&idf_val| (q, idf_val)))
             .collect();
 
         if query_terms.is_empty() {
+            // None of the query terms are in the corpus
             return Ok(vec![0.0; self.corpus_size]);
         }
 
+        // Precompute (k1 + 1)
         let k1_plus1 = k1 + 1.0;
 
+        // Compute scores in parallel
         let scores: Vec<f64> = (0..self.corpus_size)
             .into_par_iter()
             .map(|i| {
                 let doc_freq = &doc_freqs[i];
                 let dl = doc_len[i] as f64;
-                let denominator = 1.0 - b + b * dl / avgdl;
+                let denom = k1 * (1.0 - b + b * dl / avgdl);
 
                 query_terms.iter().fold(0.0, |mut score, &(q, idf_val)| {
                     if let Some(&freq) = doc_freq.get(q) {
                         let freq = freq as f64;
-                        let ctd = if denominator > 0.0 {
-                            freq / denominator
-                        } else {
-                            0.0
-                        };
-                        let numerator = k1_plus1 * (ctd + delta);
-                        let denom = k1 + ctd + delta;
-                        if denom > 0.0 {
-                            score += idf_val * numerator / denom;
+                        let numerator = freq * k1_plus1;
+                        let denominator = freq + denom;
+                        if denominator > 0.0 {
+                            score += idf_val * (numerator / denominator);
                         }
                     }
                     score
@@ -132,6 +137,35 @@ impl BM25L {
             .collect();
 
         Ok(scores)
+    }
+
+    /// Retrieves the top N documents for a given query, along with their scores
+    pub fn get_top_n(
+        &self,
+        query: Vec<String>,
+        documents: Vec<String>,
+        n: Option<usize>,
+    ) -> PyResult<Vec<(String, f64)>> {
+        let n = n.unwrap_or(5);
+        if self.corpus_size != documents.len() {
+            return Err(PyErr::new::<PyValueError, _>(
+                "The documents given don't match the index corpus!",
+            ));
+        }
+
+        let scores = self.get_scores(query)?;
+
+        // Create a vector of (document, score) pairs
+        let mut doc_scores: Vec<(String, f64)> =
+            documents.into_iter().zip(scores.into_iter()).collect();
+
+        // Sort the documents by score in descending order
+        doc_scores.par_sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Take top n documents with their scores
+        let top_n: Vec<(String, f64)> = doc_scores.into_iter().take(n).collect();
+
+        Ok(top_n)
     }
 
     /// Calculates BM25 scores for a batch of documents given a query
@@ -146,44 +180,43 @@ impl BM25L {
             ));
         }
 
+        // Shared data
         let idf = Arc::clone(&self.idf);
         let doc_freqs = Arc::clone(&self.doc_freqs);
         let doc_len = Arc::clone(&self.doc_len);
         let avgdl = self.avgdl;
         let k1 = self.k1;
         let b = self.b;
-        let delta = self.delta;
 
+        // Precompute query term IDFs and filter out terms not in the corpus
         let query_terms: Vec<(&String, f64)> = query
             .iter()
             .filter_map(|q| idf.get(q).map(|&idf_val| (q, idf_val)))
             .collect();
 
         if query_terms.is_empty() {
+            // None of the query terms are in the corpus
             return Ok(vec![0.0; doc_ids.len()]);
         }
 
+        // Precompute (k1 + 1)
         let k1_plus1 = k1 + 1.0;
 
+        // Compute scores in parallel
         let scores: Vec<f64> = doc_ids
             .into_par_iter()
             .map(|i| {
                 let doc_freq = &doc_freqs[i];
                 let dl = doc_len[i] as f64;
-                let denominator = 1.0 - b + b * dl / avgdl;
+                let denom = k1 * (1.0 - b + b * dl / avgdl);
 
                 query_terms.iter().fold(0.0, |mut score, &(q, idf_val)| {
                     if let Some(&freq) = doc_freq.get(q) {
                         let freq = freq as f64;
-                        let ctd = if denominator > 0.0 {
-                            freq / denominator
-                        } else {
-                            0.0
-                        };
-                        let numerator = k1_plus1 * (ctd + delta);
-                        let denom = k1 + ctd + delta;
-                        if denom > 0.0 {
-                            score += idf_val * numerator / denom;
+                        let numerator = freq * k1_plus1;
+                        let denominator = freq + denom;
+                        if denominator > 0.0 {
+                            score += idf_val * (numerator / denominator);
                         }
                     }
                     score
@@ -193,33 +226,9 @@ impl BM25L {
 
         Ok(scores)
     }
-
-    /// Retrieves the top N documents with their scores
-    pub fn get_top_n(
-        &self,
-        query: Vec<String>,
-        documents: Vec<String>,
-        n: usize,
-    ) -> PyResult<Vec<(String, f64)>> {
-        if self.corpus_size != documents.len() {
-            return Err(PyErr::new::<PyValueError, _>(
-                "The documents given don't match the index corpus!",
-            ));
-        }
-
-        let scores = self.get_scores(query)?;
-        let mut doc_scores: Vec<(String, f64)> =
-            documents.into_iter().zip(scores.into_iter()).collect();
-
-        doc_scores.par_sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        let top_n: Vec<(String, f64)> = doc_scores.into_iter().take(n).collect();
-
-        Ok(top_n)
-    }
 }
 
-impl BM25L {
+impl BM25Okapi {
     /// Tokenizes the corpus using the provided tokenizer
     fn tokenize_corpus(&self, py: Python, corpus: &[String]) -> PyResult<Vec<Vec<String>>> {
         let tokenizer_py = self.tokenizer.as_ref().unwrap();
@@ -243,10 +252,10 @@ impl BM25L {
         &self,
         corpus: Vec<Vec<String>>,
     ) -> (
-        HashMap<String, usize>,
-        Vec<HashMap<String, usize>>,
-        Vec<usize>,
-        f64,
+        HashMap<String, usize>,      // nd
+        Vec<HashMap<String, usize>>, // doc_freqs
+        Vec<usize>,                  // doc_len
+        f64,                         // avgdl
     ) {
         let corpus_size = corpus.len();
 
@@ -285,15 +294,37 @@ impl BM25L {
         (nd, doc_freqs, doc_len, avgdl)
     }
 
-    /// Calculates the inverse document frequency (IDF)
+    /// Calculates the inverse document frequency (IDF) with negative IDF adjustment
     fn calc_idf(&self, nd: HashMap<String, usize>) -> HashMap<String, f64> {
         let corpus_size = self.corpus_size as f64;
+        let epsilon = self.epsilon;
 
-        nd.into_par_iter()
-            .map(|(word, freq)| {
-                let idf_val = (corpus_size + 1.0).ln() - (freq as f64 + 0.5).ln();
-                (word, idf_val)
+        // Compute initial IDF values
+        let idf_values: Vec<(String, f64)> = nd
+            .par_iter()
+            .map(|(term, &doc_freq)| {
+                let idf = ((corpus_size - doc_freq as f64 + 0.5) / (doc_freq as f64 + 0.5)).ln();
+                (term.clone(), idf)
             })
+            .collect();
+
+        // Compute average IDF and adjust negative values
+        let idf_sum: f64 = idf_values.par_iter().map(|(_, idf)| *idf).sum();
+        let average_idf = idf_sum / idf_values.len() as f64;
+        let eps = epsilon * average_idf;
+
+        // Adjust negative IDFs
+        idf_values
+            .into_par_iter()
+            .map(
+                |(term, idf)| {
+                    if idf < 0.0 {
+                        (term, eps)
+                    } else {
+                        (term, idf)
+                    }
+                },
+            )
             .collect()
     }
 }

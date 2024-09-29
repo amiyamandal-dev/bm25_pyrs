@@ -4,9 +4,9 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// BM25L structure with necessary fields
+/// BM25Plus structure with necessary fields
 #[pyclass]
-pub struct BM25L {
+pub struct BM25Plus {
     #[pyo3(get)]
     k1: f64,
     #[pyo3(get)]
@@ -24,7 +24,7 @@ pub struct BM25L {
 }
 
 #[pymethods]
-impl BM25L {
+impl BM25Plus {
     #[new]
     pub fn new(
         py: Python,
@@ -36,11 +36,11 @@ impl BM25L {
     ) -> PyResult<Self> {
         let k1 = k1.unwrap_or(1.5);
         let b = b.unwrap_or(0.75);
-        let delta = delta.unwrap_or(0.5); // Default delta value for BM25L
+        let delta = delta.unwrap_or(1.0); // Default delta for BM25Plus is 1.0
 
         let tokenizer = tokenizer.map(|tokenizer| tokenizer.into());
 
-        let mut bm25 = BM25L {
+        let mut bm25 = BM25Plus {
             k1,
             b,
             delta,
@@ -80,7 +80,7 @@ impl BM25L {
         Ok(bm25)
     }
 
-    /// Calculates BM25L scores for a given query
+    /// Calculates BM25Plus scores for a given query
     pub fn get_scores(&self, query: Vec<String>) -> PyResult<Vec<f64>> {
         if self.corpus_size == 0 {
             return Ok(vec![]);
@@ -110,20 +110,15 @@ impl BM25L {
             .map(|i| {
                 let doc_freq = &doc_freqs[i];
                 let dl = doc_len[i] as f64;
-                let denominator = 1.0 - b + b * dl / avgdl;
+                let denom = k1 * (1.0 - b + b * dl / avgdl);
 
                 query_terms.iter().fold(0.0, |mut score, &(q, idf_val)| {
                     if let Some(&freq) = doc_freq.get(q) {
                         let freq = freq as f64;
-                        let ctd = if denominator > 0.0 {
-                            freq / denominator
-                        } else {
-                            0.0
-                        };
-                        let numerator = k1_plus1 * (ctd + delta);
-                        let denom = k1 + ctd + delta;
-                        if denom > 0.0 {
-                            score += idf_val * numerator / denom;
+                        let numerator = delta + freq * k1_plus1;
+                        let denominator = denom + freq;
+                        if denominator > 0.0 {
+                            score += idf_val * (numerator / denominator);
                         }
                     }
                     score
@@ -170,20 +165,15 @@ impl BM25L {
             .map(|i| {
                 let doc_freq = &doc_freqs[i];
                 let dl = doc_len[i] as f64;
-                let denominator = 1.0 - b + b * dl / avgdl;
+                let denom = k1 * (1.0 - b + b * dl / avgdl);
 
                 query_terms.iter().fold(0.0, |mut score, &(q, idf_val)| {
                     if let Some(&freq) = doc_freq.get(q) {
                         let freq = freq as f64;
-                        let ctd = if denominator > 0.0 {
-                            freq / denominator
-                        } else {
-                            0.0
-                        };
-                        let numerator = k1_plus1 * (ctd + delta);
-                        let denom = k1 + ctd + delta;
-                        if denom > 0.0 {
-                            score += idf_val * numerator / denom;
+                        let numerator = delta + freq * k1_plus1;
+                        let denominator = denom + freq;
+                        if denominator > 0.0 {
+                            score += idf_val * (numerator / denominator);
                         }
                     }
                     score
@@ -219,7 +209,7 @@ impl BM25L {
     }
 }
 
-impl BM25L {
+impl BM25Plus {
     /// Tokenizes the corpus using the provided tokenizer
     fn tokenize_corpus(&self, py: Python, corpus: &[String]) -> PyResult<Vec<Vec<String>>> {
         let tokenizer_py = self.tokenizer.as_ref().unwrap();
@@ -243,10 +233,10 @@ impl BM25L {
         &self,
         corpus: Vec<Vec<String>>,
     ) -> (
-        HashMap<String, usize>,
-        Vec<HashMap<String, usize>>,
-        Vec<usize>,
-        f64,
+        HashMap<String, usize>,      // nd
+        Vec<HashMap<String, usize>>, // doc_freqs
+        Vec<usize>,                  // doc_len
+        f64,                         // avgdl
     ) {
         let corpus_size = corpus.len();
 
@@ -291,7 +281,7 @@ impl BM25L {
 
         nd.into_par_iter()
             .map(|(word, freq)| {
-                let idf_val = (corpus_size + 1.0).ln() - (freq as f64 + 0.5).ln();
+                let idf_val = (corpus_size + 1.0).ln() - (freq as f64).ln();
                 (word, idf_val)
             })
             .collect()
