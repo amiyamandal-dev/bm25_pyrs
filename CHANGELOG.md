@@ -39,4 +39,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - SIMD-optimized scoring functions
 - Optimized top-k selection algorithms
 
-[0.1.0]: https://github.com/yourusername/bm25-rs/releases/tag/v0.1.0
+[0.1.0]: https://github.com/dorianbrown/rank_bm25/releases/tag/v0.1.0

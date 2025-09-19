@@ -7,7 +7,7 @@ The BM25-RS package has been successfully converted into a production-ready Pyth
 ## 📦 Package Structure
 
 ```
-bm25-rs/
+rank_bm25/
 ├── 🦀 Rust Core (High-Performance Implementation)
 │   ├── src/lib.rs              # Main module entry point
 │   ├── src/bm25okapi.rs        # Optimized BM25Okapi implementation

@@ -153,8 +153,8 @@ class BM25Okapi:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/bm25-rs.git
-cd bm25-rs
+git clone https://github.com/dorianbrown/rank_bm25.git
+cd rank_bm25
 
 # Install development dependencies
 pip install -e .[dev]

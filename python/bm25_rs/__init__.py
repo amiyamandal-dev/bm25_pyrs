@@ -8,7 +8,7 @@ from ._bm25_rs import BM25Okapi, BM25Plus, BM25L
 
 __version__ = "0.1.0"
 __author__ = "BM25-RS Team"
-__email__ = "your.email@example.com"
+__email__ = "maintainers@example.com"
 
 __all__ = [
     "BM25Okapi",

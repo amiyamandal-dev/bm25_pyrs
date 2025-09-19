@@ -24,7 +24,7 @@ pip install psutil matplotlib numpy
 ## Project Structure
 
 ```
-bm25-rs/
+rank_bm25/
 ├── src/                    # Rust source code
 │   ├── lib.rs             # Main library entry point
 │   ├── bm25okapi.rs       # BM25Okapi implementation
@@ -52,8 +52,8 @@ bm25-rs/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/bm25-rs.git
-cd bm25-rs
+git clone https://github.com/dorianbrown/rank_bm25.git
+cd rank_bm25
 
 # Create virtual environment
 python -m venv .venv
@@ -302,8 +302,8 @@ pip-audit
 ## Support and Contributing
 
 ### Getting Help
-- **Issues**: [GitHub Issues](https://github.com/yourusername/bm25-rs/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/bm25-rs/discussions)
+- **Issues**: [GitHub Issues](https://github.com/dorianbrown/rank_bm25/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/dorianbrown/rank_bm25/discussions)
 - **Documentation**: [README.md](README.md)
 
 ### Contributing
