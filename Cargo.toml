@@ -1,13 +1,23 @@
 [package]
-name = "bm25_pyrs"
+name = "bm25-rs"
 version = "0.1.0"
 edition = "2021"
+description = "High-performance BM25 implementation in Rust with Python bindings"
+license = "MIT"
+repository = "https://github.com/yourusername/bm25-rs"
+homepage = "https://github.com/yourusername/bm25-rs"
+documentation = "https://github.com/yourusername/bm25-rs#readme"
+keywords = ["bm25", "search", "information-retrieval", "rust", "performance"]
+categories = ["algorithms", "text-processing"]
+authors = ["Your Name <your.email@example.com>"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "bm25_pyrs"
+name = "bm25_rs"
 crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.20", features = ["extension-module"] }
 rayon = "1.1"
+ahash = "0.8"
+smallvec = "1.11"
+string-interner = "0.15"

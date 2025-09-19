@@ -1,0 +1,35 @@
+# Include important files in the source distribution
+include README.md
+include LICENSE
+include CHANGELOG.md
+include OPTIMIZATION_SUMMARY.md
+include Cargo.toml
+include Cargo.lock
+include pyproject.toml
+
+# Include Rust source code
+recursive-include src *.rs
+
+# Include Python package
+recursive-include python *.py
+
+# Include tests
+recursive-include tests *.py
+
+# Include benchmarks and examples
+recursive-include benchmarks *.py
+recursive-include examples *.py
+
+# Exclude development files
+exclude .gitignore
+exclude .github
+recursive-exclude .github *
+exclude *.pyc
+exclude __pycache__
+recursive-exclude __pycache__ *
+exclude .pytest_cache
+recursive-exclude .pytest_cache *
+exclude target
+recursive-exclude target *
+exclude .venv
+recursive-exclude .venv *

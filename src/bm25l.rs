@@ -1,10 +1,12 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use ahash::AHashMap;
+use smallvec::SmallVec;
+use string_interner::{StringInterner, DefaultSymbol, DefaultBackend};
 use std::sync::Arc;
 
-/// BM25L structure with necessary fields
+/// BM25L structure with necessary fields - optimized version
 #[pyclass]
 pub struct BM25L {
     #[pyo3(get)]
@@ -17,10 +19,16 @@ pub struct BM25L {
     corpus_size: usize,
     #[pyo3(get)]
     avgdl: f64,
-    doc_freqs: Arc<Vec<HashMap<String, usize>>>,
-    idf: Arc<HashMap<String, f64>>,
-    doc_len: Arc<Vec<usize>>,
+    // Optimized data structures
+    doc_freqs: Arc<Vec<AHashMap<DefaultSymbol, u32>>>,
+    idf: Arc<AHashMap<DefaultSymbol, f64>>,
+    doc_len: Arc<Vec<u32>>,
+    interner: Arc<StringInterner<DefaultBackend>>,
     tokenizer: Option<Py<PyAny>>,
+    // Precomputed values
+    k1_plus1: f64,
+    one_minus_b: f64,
+    b_over_avgdl: f64,
 }
 
 #[pymethods]
@@ -36,97 +44,116 @@ impl BM25L {
     ) -> PyResult<Self> {
         let k1 = k1.unwrap_or(1.5);
         let b = b.unwrap_or(0.75);
-        let delta = delta.unwrap_or(0.5); // Default delta value for BM25L
+        let delta = delta.unwrap_or(0.5);
 
         let tokenizer = tokenizer.map(|tokenizer| tokenizer.into());
+        let mut interner = StringInterner::default();
 
-        let mut bm25 = BM25L {
-            k1,
-            b,
-            delta,
-            corpus_size: 0,
-            avgdl: 0.0,
-            doc_freqs: Arc::new(Vec::new()),
-            idf: Arc::new(HashMap::new()),
-            doc_len: Arc::new(Vec::new()),
-            tokenizer,
-        };
-
-        // Tokenize corpus
-        let tokenized_corpus = if let Some(ref tokenizer_py) = bm25.tokenizer {
-            bm25.tokenize_corpus(py, &corpus)?
+        // Tokenize corpus with optimization
+        let tokenized_corpus = if let Some(ref tokenizer_py) = tokenizer {
+            Self::tokenize_corpus_with_py(py, &corpus, tokenizer_py)?
         } else {
             corpus
                 .par_iter()
-                .map(|doc| doc.split_whitespace().map(|s| s.to_lowercase()).collect())
+                .map(|doc| {
+                    doc.split_whitespace()
+                        .map(|s| s.to_lowercase())
+                        .collect::<SmallVec<[String; 16]>>()
+                })
                 .collect()
         };
 
-        bm25.corpus_size = tokenized_corpus.len();
-        if bm25.corpus_size == 0 {
+        let corpus_size = tokenized_corpus.len();
+        if corpus_size == 0 {
             return Err(PyErr::new::<PyValueError, _>(
                 "Corpus size must be greater than zero.",
             ));
         }
 
-        // Initialize structures
-        let (nd, doc_freqs, doc_len, avgdl) = bm25.initialize(tokenized_corpus);
-        let idf_map = bm25.calc_idf(nd);
-        bm25.idf = Arc::new(idf_map);
-        bm25.doc_freqs = Arc::new(doc_freqs);
-        bm25.doc_len = Arc::new(doc_len);
-        bm25.avgdl = avgdl;
+        // Initialize with optimized structures
+        let (nd, doc_freqs, doc_len, avgdl) = Self::initialize_optimized(tokenized_corpus, &mut interner);
+        let idf_map = Self::calc_idf_optimized(nd, corpus_size);
 
-        Ok(bm25)
+        // Precompute values
+        let k1_plus1 = k1 + 1.0;
+        let one_minus_b = 1.0 - b;
+        let b_over_avgdl = b / avgdl;
+
+        Ok(BM25L {
+            k1,
+            b,
+            delta,
+            corpus_size,
+            avgdl,
+            doc_freqs: Arc::new(doc_freqs),
+            idf: Arc::new(idf_map),
+            doc_len: Arc::new(doc_len),
+            interner: Arc::new(interner),
+            tokenizer,
+            k1_plus1,
+            one_minus_b,
+            b_over_avgdl,
+        })
     }
 
-    /// Calculates BM25L scores for a given query
+    /// Calculates BM25L scores for a given query - optimized version
     pub fn get_scores(&self, query: Vec<String>) -> PyResult<Vec<f64>> {
         if self.corpus_size == 0 {
             return Ok(vec![]);
         }
 
-        let idf = Arc::clone(&self.idf);
-        let doc_freqs = Arc::clone(&self.doc_freqs);
-        let doc_len = Arc::clone(&self.doc_len);
-        let avgdl = self.avgdl;
-        let k1 = self.k1;
-        let b = self.b;
-        let delta = self.delta;
-
-        let query_terms: Vec<(&String, f64)> = query
+        // Convert query terms to symbols
+        let query_symbols: SmallVec<[DefaultSymbol; 8]> = query
             .iter()
-            .filter_map(|q| idf.get(q).map(|&idf_val| (q, idf_val)))
+            .filter_map(|term| self.interner.get(term))
+            .collect();
+
+        if query_symbols.is_empty() {
+            return Ok(vec![0.0; self.corpus_size]);
+        }
+
+        // Precompute query term IDFs
+        let query_terms: SmallVec<[(DefaultSymbol, f64); 8]> = query_symbols
+            .iter()
+            .filter_map(|&symbol| self.idf.get(&symbol).map(|&idf_val| (symbol, idf_val)))
             .collect();
 
         if query_terms.is_empty() {
             return Ok(vec![0.0; self.corpus_size]);
         }
 
-        let k1_plus1 = k1 + 1.0;
+        // Use precomputed values
+        let k1_plus1 = self.k1_plus1;
+        let one_minus_b = self.one_minus_b;
+        let b_over_avgdl = self.b_over_avgdl;
+        let k1 = self.k1;
+        let delta = self.delta;
 
         let scores: Vec<f64> = (0..self.corpus_size)
             .into_par_iter()
             .map(|i| {
-                let doc_freq = &doc_freqs[i];
-                let dl = doc_len[i] as f64;
-                let denominator = 1.0 - b + b * dl / avgdl;
+                let doc_freq = &self.doc_freqs[i];
+                let dl = self.doc_len[i] as f64;
+                let denominator = one_minus_b + b_over_avgdl * dl;
 
-                query_terms.iter().fold(0.0, |mut score, &(q, idf_val)| {
-                    if let Some(&freq) = doc_freq.get(q) {
-                        let freq = freq as f64;
+                query_terms.iter().fold(0.0, |score, &(symbol, idf_val)| {
+                    if let Some(&freq) = doc_freq.get(&symbol) {
+                        let freq_f64 = freq as f64;
                         let ctd = if denominator > 0.0 {
-                            freq / denominator
+                            freq_f64 / denominator
                         } else {
                             0.0
                         };
                         let numerator = k1_plus1 * (ctd + delta);
                         let denom = k1 + ctd + delta;
                         if denom > 0.0 {
-                            score += idf_val * numerator / denom;
+                            score + idf_val * numerator / denom
+                        } else {
+                            score
                         }
+                    } else {
+                        score
                     }
-                    score
                 })
             })
             .collect();
@@ -134,7 +161,7 @@ impl BM25L {
         Ok(scores)
     }
 
-    /// Calculates BM25 scores for a batch of documents given a query
+    /// Calculates BM25 scores for a batch of documents given a query - optimized version
     pub fn get_batch_scores(&self, query: Vec<String>, doc_ids: Vec<usize>) -> PyResult<Vec<f64>> {
         if doc_ids.is_empty() {
             return Ok(vec![]);
@@ -146,47 +173,58 @@ impl BM25L {
             ));
         }
 
-        let idf = Arc::clone(&self.idf);
-        let doc_freqs = Arc::clone(&self.doc_freqs);
-        let doc_len = Arc::clone(&self.doc_len);
-        let avgdl = self.avgdl;
-        let k1 = self.k1;
-        let b = self.b;
-        let delta = self.delta;
-
-        let query_terms: Vec<(&String, f64)> = query
+        // Convert query terms to symbols
+        let query_symbols: SmallVec<[DefaultSymbol; 8]> = query
             .iter()
-            .filter_map(|q| idf.get(q).map(|&idf_val| (q, idf_val)))
+            .filter_map(|term| self.interner.get(term))
+            .collect();
+
+        if query_symbols.is_empty() {
+            return Ok(vec![0.0; doc_ids.len()]);
+        }
+
+        // Precompute query term IDFs
+        let query_terms: SmallVec<[(DefaultSymbol, f64); 8]> = query_symbols
+            .iter()
+            .filter_map(|&symbol| self.idf.get(&symbol).map(|&idf_val| (symbol, idf_val)))
             .collect();
 
         if query_terms.is_empty() {
             return Ok(vec![0.0; doc_ids.len()]);
         }
 
-        let k1_plus1 = k1 + 1.0;
+        // Use precomputed values
+        let k1_plus1 = self.k1_plus1;
+        let one_minus_b = self.one_minus_b;
+        let b_over_avgdl = self.b_over_avgdl;
+        let k1 = self.k1;
+        let delta = self.delta;
 
         let scores: Vec<f64> = doc_ids
             .into_par_iter()
             .map(|i| {
-                let doc_freq = &doc_freqs[i];
-                let dl = doc_len[i] as f64;
-                let denominator = 1.0 - b + b * dl / avgdl;
+                let doc_freq = &self.doc_freqs[i];
+                let dl = self.doc_len[i] as f64;
+                let denominator = one_minus_b + b_over_avgdl * dl;
 
-                query_terms.iter().fold(0.0, |mut score, &(q, idf_val)| {
-                    if let Some(&freq) = doc_freq.get(q) {
-                        let freq = freq as f64;
+                query_terms.iter().fold(0.0, |score, &(symbol, idf_val)| {
+                    if let Some(&freq) = doc_freq.get(&symbol) {
+                        let freq_f64 = freq as f64;
                         let ctd = if denominator > 0.0 {
-                            freq / denominator
+                            freq_f64 / denominator
                         } else {
                             0.0
                         };
                         let numerator = k1_plus1 * (ctd + delta);
                         let denom = k1 + ctd + delta;
                         if denom > 0.0 {
-                            score += idf_val * numerator / denom;
+                            score + idf_val * numerator / denom
+                        } else {
+                            score
                         }
+                    } else {
+                        score
                     }
-                    score
                 })
             })
             .collect();
@@ -221,10 +259,11 @@ impl BM25L {
 
 impl BM25L {
     /// Tokenizes the corpus using the provided tokenizer
-    fn tokenize_corpus(&self, py: Python, corpus: &[String]) -> PyResult<Vec<Vec<String>>> {
-        let tokenizer_py = self.tokenizer.as_ref().unwrap();
-
-        // Sequential tokenization due to GIL requirements
+    fn tokenize_corpus_with_py(
+        py: Python,
+        corpus: &[String],
+        tokenizer_py: &Py<PyAny>,
+    ) -> PyResult<Vec<SmallVec<[String; 16]>>> {
         let mut tokenized_corpus = Vec::with_capacity(corpus.len());
         for doc in corpus {
             let tokens: Vec<String> = tokenizer_py
@@ -232,67 +271,88 @@ impl BM25L {
                 .map_err(|e| PyValueError::new_err(format!("Tokenizer failed: {}", e)))?
                 .extract(py)
                 .map_err(|e| PyValueError::new_err(format!("Failed to extract tokens: {}", e)))?;
-            tokenized_corpus.push(tokens);
+            tokenized_corpus.push(SmallVec::from_vec(tokens));
         }
 
         Ok(tokenized_corpus)
     }
 
-    /// Initializes document frequencies and other metrics
-    fn initialize(
-        &self,
-        corpus: Vec<Vec<String>>,
+    /// Optimized initialization with string interning
+    fn initialize_optimized(
+        corpus: Vec<SmallVec<[String; 16]>>,
+        interner: &mut StringInterner<DefaultBackend>,
     ) -> (
-        HashMap<String, usize>,
-        Vec<HashMap<String, usize>>,
-        Vec<usize>,
+        AHashMap<DefaultSymbol, u32>,
+        Vec<AHashMap<DefaultSymbol, u32>>,
+        Vec<u32>,
         f64,
     ) {
         let corpus_size = corpus.len();
 
-        // Calculate document lengths and frequencies in parallel
-        let doc_data: Vec<(HashMap<String, usize>, usize, HashSet<String>)> = corpus
+        // Pre-intern all unique terms
+        let mut all_terms = std::collections::HashSet::new();
+        for doc in &corpus {
+            for term in doc {
+                all_terms.insert(term.as_str());
+            }
+        }
+
+        let _: Vec<_> = all_terms.iter().map(|term| interner.get_or_intern(term)).collect();
+
+        // Process documents in parallel
+        let doc_data: Vec<(AHashMap<DefaultSymbol, u32>, u32, std::collections::HashSet<DefaultSymbol>)> = corpus
             .into_par_iter()
             .map(|doc| {
-                let mut freq_map = HashMap::new();
+                let mut freq_map = AHashMap::with_capacity(doc.len().min(64));
+                let mut unique_terms = std::collections::HashSet::with_capacity(doc.len().min(64));
+                
                 for term in &doc {
-                    *freq_map.entry(term.clone()).or_insert(0) += 1;
+                    if let Some(symbol) = interner.get(term) {
+                        *freq_map.entry(symbol).or_insert(0) += 1;
+                        unique_terms.insert(symbol);
+                    }
                 }
-                let unique_terms: HashSet<String> = freq_map.keys().cloned().collect();
-                (freq_map, doc.len(), unique_terms)
+                
+                (freq_map, doc.len() as u32, unique_terms)
             })
             .collect();
 
-        // Collect doc_freqs and doc_len
-        let doc_freqs: Vec<HashMap<String, usize>> = doc_data
-            .iter()
-            .map(|(freq_map, _, _)| freq_map.clone())
-            .collect();
+        // Collect results
+        let mut doc_freqs = Vec::with_capacity(corpus_size);
+        let mut doc_len = Vec::with_capacity(corpus_size);
+        let mut total_len = 0u64;
 
-        let doc_len: Vec<usize> = doc_data.iter().map(|(_, len, _)| *len).collect();
+        for (freq_map, len, _) in &doc_data {
+            doc_freqs.push(freq_map.clone());
+            doc_len.push(*len);
+            total_len += *len as u64;
+        }
 
-        let total_len: usize = doc_len.iter().sum();
         let avgdl = total_len as f64 / corpus_size as f64;
 
-        // Compute nd (document frequencies)
-        let mut nd = HashMap::new();
+        // Compute document frequencies
+        let mut nd = AHashMap::new();
         for (_, _, unique_terms) in &doc_data {
-            for term in unique_terms {
-                *nd.entry(term.clone()).or_insert(0) += 1;
+            for &symbol in unique_terms {
+                *nd.entry(symbol).or_insert(0) += 1;
             }
         }
 
         (nd, doc_freqs, doc_len, avgdl)
     }
 
-    /// Calculates the inverse document frequency (IDF)
-    fn calc_idf(&self, nd: HashMap<String, usize>) -> HashMap<String, f64> {
-        let corpus_size = self.corpus_size as f64;
+    /// Optimized IDF calculation for BM25L
+    fn calc_idf_optimized(
+        nd: AHashMap<DefaultSymbol, u32>,
+        corpus_size: usize,
+    ) -> AHashMap<DefaultSymbol, f64> {
+        let corpus_size_f64 = corpus_size as f64;
 
-        nd.into_par_iter()
-            .map(|(word, freq)| {
-                let idf_val = (corpus_size + 1.0).ln() - (freq as f64 + 0.5).ln();
-                (word, idf_val)
+        nd.into_iter()
+            .map(|(symbol, freq)| {
+                let freq_f64 = freq as f64;
+                let idf_val = (corpus_size_f64 + 1.0).ln() - (freq_f64 + 0.5).ln();
+                (symbol, idf_val)
             })
             .collect()
     }

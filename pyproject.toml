@@ -3,14 +3,85 @@ requires = ["maturin>=1.4,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "bm25_pyrs"
-requires-python = ">=3.8"
+name = "bm25-rs"
+version = "0.1.0"
+description = "High-performance BM25 implementation in Rust with Python bindings"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+maintainers = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["bm25", "search", "information-retrieval", "rust", "performance"]
 classifiers = [
-    "Programming Language :: Rust",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Text Processing :: Indexing",
 ]
-dynamic = ["version"]
+requires-python = ">=3.8"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/bm25-rs"
+Documentation = "https://github.com/yourusername/bm25-rs#readme"
+Repository = "https://github.com/yourusername/bm25-rs.git"
+"Bug Tracker" = "https://github.com/yourusername/bm25-rs/issues"
+Changelog = "https://github.com/yourusername/bm25-rs/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-benchmark>=4.0",
+    "black>=22.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+benchmark = [
+    "psutil>=5.8.0",
+    "matplotlib>=3.5.0",
+    "numpy>=1.21.0",
+]
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "bm25_rs._bm25_rs"
+
+[tool.ruff]
+line-length = 88
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "YTT", "S", "BLE", "FBT", "B", "A", "COM", "C4", "DTZ", "T10", "EM", "EXE", "FA", "ISC", "ICN", "G", "INP", "PIE", "T20", "PYI", "PT", "Q", "RSE", "RET", "SLF", "SLOT", "SIM", "TID", "TCH", "INT", "ARG", "PTH", "TD", "FIX", "ERA", "PD", "PGH", "PL", "TRY", "FLY", "NPY", "AIR", "PERF", "FURB", "LOG", "RUF"]
+ignore = ["E501", "S101", "PLR0913", "PLR0912", "PLR0915"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true

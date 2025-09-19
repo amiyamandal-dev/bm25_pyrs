@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-wheels:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build wheels
+      run: maturin build --release
+
+    - name: Upload wheels
+      uses: actions/upload-artifact@v3
+      with:
+        name: wheels-${{ matrix.os }}
+        path: target/wheels/
+
+  build-sdist:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build sdist
+      run: maturin sdist
+
+    - name: Upload sdist
+      uses: actions/upload-artifact@v3
+      with:
+        name: sdist
+        path: target/wheels/
+
+  publish:
+    needs: [build-wheels, build-sdist]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      id-token: write  # For trusted publishing
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        packages-dir: wheels-*/
+
+  create-release:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        body: |
+          ## Changes
+          
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
+          
+          ## Installation
+          
+          ```bash
+          pip install bm25-rs
+          ```
+        draft: false
+        prerelease: false
