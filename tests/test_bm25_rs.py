@@ -1,7 +1,7 @@
 from typing import List
 
 import pytest
-from bm25_pyrs.bm25_pyrs import BM25Okapi
+from bm25_rs import BM25Okapi
 
 
 @pytest.fixture
