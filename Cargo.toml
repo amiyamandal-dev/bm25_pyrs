@@ -1,6 +1,6 @@
 [package]
 name = "bm25-rs"
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 description = "High-performance BM25 implementation in Rust with Python bindings"
 license = "MIT"

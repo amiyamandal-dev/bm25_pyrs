@@ -89,8 +89,8 @@ def build_distributions():
             import shutil
             shutil.rmtree(dist_path)
     
-    # Build wheel and sdist
-    run_command(["maturin", "build", "--release"])
+    # Build wheel and sdist with better cross-platform support
+    run_command(["maturin", "build", "--release", "--find-interpreter"])
     run_command(["maturin", "sdist"])
 
 
