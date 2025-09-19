@@ -98,6 +98,10 @@ wheels = [
 name = "bm25-rs"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "pytest", version = "8.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+]
 
 [package.optional-dependencies]
 benchmark = [
@@ -129,6 +133,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0" },
     { name = "numpy", marker = "extra == 'benchmark'", specifier = ">=1.21.0" },
     { name = "psutil", marker = "extra == 'benchmark'", specifier = ">=5.8.0" },
+    { name = "pytest", specifier = ">=8.3.5" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0" },
     { name = "pytest-benchmark", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
