@@ -1,15 +1,14 @@
 [package]
 name = "bm25-rs"
-version = "0.1.2"
+version = "1.0.0"
 edition = "2021"
 description = "High-performance BM25 implementation in Rust with Python bindings"
 license = "MIT"
 repository = "https://github.com/dorianbrown/rank_bm25"
 homepage = "https://github.com/dorianbrown/rank_bm25"
-documentation = "https://github.com/dorianbrown/rank_bm25#readme"
 keywords = ["bm25", "search", "information-retrieval", "rust", "performance"]
 categories = ["algorithms", "text-processing"]
-authors = ["BM25-RS Contributors <maintainers@example.com>"]
+authors = ["BM25-RS Contributors <amiya19mandal@pm.me>"]
 
 [lib]
 name = "bm25_rs"
