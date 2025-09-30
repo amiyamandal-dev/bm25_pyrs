@@ -1,0 +1,167 @@
+name: Version Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump_type:
+        description: 'Type of version bump'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+        - patch
+        - minor
+        - major
+      custom_version:
+        description: 'Custom version (optional, overrides bump_type)'
+        required: false
+        type: string
+      create_release:
+        description: 'Create release after version bump'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      new_version: ${{ steps.version.outputs.new_version }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        fetch-depth: 0
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install toml
+    
+    - name: Bump version
+      id: version
+      run: |
+        python << 'EOF'
+        import toml
+        import re
+        import os
+        from pathlib import Path
+        
+        def get_current_version():
+            """Get current version from pyproject.toml"""
+            with open('pyproject.toml', 'r') as f:
+                data = toml.load(f)
+            return data['project']['version']
+        
+        def bump_version(current, bump_type):
+            """Bump version based on type"""
+            parts = [int(x) for x in current.split('.')]
+            if bump_type == 'major':
+                return f"{parts[0] + 1}.0.0"
+            elif bump_type == 'minor':
+                return f"{parts[0]}.{parts[1] + 1}.0"
+            elif bump_type == 'patch':
+                return f"{parts[0]}.{parts[1]}.{parts[2] + 1}"
+            return current
+        
+        def update_version_in_file(file_path, new_version):
+            """Update version in a file"""
+            content = Path(file_path).read_text()
+            if file_path.endswith('.toml'):
+                # Handle TOML files - update first occurrence of version
+                content = re.sub(r'version\s*=\s*"[^"]+"', f'version = "{new_version}"', content, count=1)
+            Path(file_path).write_text(content)
+        
+        # Get inputs
+        custom_version = os.getenv('CUSTOM_VERSION', '').strip()
+        bump_type = os.getenv('BUMP_TYPE', 'patch').strip()
+        
+        # Calculate new version
+        current_version = get_current_version()
+        print(f"Current version: {current_version}")
+        
+        if custom_version:
+            new_version = custom_version
+            print(f"Using custom version: {new_version}")
+        else:
+            new_version = bump_version(current_version, bump_type)
+            print(f"Bumped {bump_type} version: {new_version}")
+        
+        # Validate version format
+        if not re.match(r'^\d+\.\d+\.\d+$', new_version):
+            raise ValueError(f"Invalid version format: {new_version}")
+        
+        # Update version in files
+        update_version_in_file('pyproject.toml', new_version)
+        update_version_in_file('Cargo.toml', new_version)
+        
+        print(f"Updated version to: {new_version}")
+        
+        # Set outputs
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f"new_version={new_version}\n")
+            f.write(f"tag_name=v{new_version}\n")
+        EOF
+      env:
+        CUSTOM_VERSION: ${{ github.event.inputs.custom_version }}
+        BUMP_TYPE: ${{ github.event.inputs.bump_type }}
+    
+    - name: Commit version changes
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add pyproject.toml Cargo.toml
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Bump version to ${{ steps.version.outputs.new_version }}"
+          git push
+        fi
+    
+    - name: Create tag
+      run: |
+        git tag ${{ steps.version.outputs.tag_name }}
+        git push origin ${{ steps.version.outputs.tag_name }}
+    
+    - name: Summary
+      run: |
+        echo "## Version Bump Summary" >> $GITHUB_STEP_SUMMARY
+        echo "- **New Version**: ${{ steps.version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tag**: ${{ steps.version.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: $(git rev-parse HEAD)" >> $GITHUB_STEP_SUMMARY
+        if [ "${{ github.event.inputs.create_release }}" = "true" ]; then
+          echo "- **Release**: Will be triggered automatically" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "- **Release**: Manual trigger required" >> $GITHUB_STEP_SUMMARY
+        fi
+
+  trigger-release:
+    if: github.event.inputs.create_release == 'true'
+    needs: bump-version
+    runs-on: ubuntu-latest
+    steps:
+    - name: Trigger Release Workflow
+      uses: actions/github-script@v7
+      with:
+        script: |
+          await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'release.yml',
+            ref: 'main',
+            inputs: {
+              version: '${{ needs.bump-version.outputs.new_version }}',
+              version_type: 'manual',
+              create_tag: 'false'  // Tag already created
+            }
+          });
+          
+          console.log('Release workflow triggered for version ${{ needs.bump-version.outputs.new_version }}');

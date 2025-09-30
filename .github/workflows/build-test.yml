@@ -1,0 +1,187 @@
+name: Build Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_os:
+        description: 'Target OS to build for'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+        - all
+        - linux
+        - windows
+        - macos
+        - musllinux
+      upload_to_test_pypi:
+        description: 'Upload to Test PyPI'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    if: ${{ github.event.inputs.target_os == 'all' || github.event.inputs.target_os == 'linux' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64, x86, aarch64, armv7, s390x, ppc64le]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Build wheels
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.target }}
+        args: --release --out dist --find-interpreter
+        sccache: 'true'
+        manylinux: auto
+        rust-toolchain: stable
+    
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-linux-${{ matrix.target }}
+        path: dist
+
+  windows:
+    if: ${{ github.event.inputs.target_os == 'all' || github.event.inputs.target_os == 'windows' }}
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        target: [x64, x86]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        architecture: ${{ matrix.target }}
+    
+    - name: Build wheels
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.target }}
+        args: --release --out dist --find-interpreter
+        sccache: 'true'
+        rust-toolchain: stable
+    
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-windows-${{ matrix.target }}
+        path: dist
+
+  macos:
+    if: ${{ github.event.inputs.target_os == 'all' || github.event.inputs.target_os == 'macos' }}
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target: [x86_64, aarch64]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Build wheels
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.target }}
+        args: --release --out dist --find-interpreter
+        sccache: 'true'
+        rust-toolchain: stable
+    
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-macos-${{ matrix.target }}
+        path: dist
+
+  musllinux:
+    if: ${{ github.event.inputs.target_os == 'all' || github.event.inputs.target_os == 'musllinux' }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Build wheels
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.target }}
+        args: --release --out dist --find-interpreter
+        sccache: 'true'
+        manylinux: musllinux_1_2
+        rust-toolchain: stable
+    
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-musllinux-${{ matrix.target }}
+        path: dist
+
+  test-upload:
+    name: Test Upload to PyPI
+    runs-on: ubuntu-latest
+    needs: [linux, windows, macos, musllinux]
+    if: ${{ github.event.inputs.upload_to_test_pypi == 'true' }}
+    permissions:
+      id-token: write
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/bm25-rs
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: wheels-*
+        path: dist
+        merge-multiple: true
+    
+    - name: List built wheels
+      run: ls -la dist/
+    
+    - name: Publish to Test PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+        verbose: true
+
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [linux, windows, macos, musllinux]
+    if: always()
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: wheels-*
+        path: dist
+        merge-multiple: true
+    
+    - name: List all built wheels
+      run: |
+        echo "Built wheels:"
+        ls -la dist/ || echo "No wheels found"
+        echo ""
+        echo "Wheel count by platform:"
+        find dist/ -name "*.whl" | sed 's/.*-\([^-]*\)-[^-]*\.whl/\1/' | sort | uniq -c || echo "No wheels to count"
