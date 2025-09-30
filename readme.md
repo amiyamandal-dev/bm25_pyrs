@@ -9,7 +9,7 @@ A blazingly fast BM25 implementation in Rust with Python bindings. This library 
 ## 🚀 Features
 
 - **🔥 High Performance**: 4000+ queries per second with sub-millisecond latency
-- **🧵 Thread-Safe**: Perfect linear scaling with concurrent queries  
+- **🧵 Thread-Safe**: Perfect linear scaling with concurrent queries
 - **💾 Memory Efficient**: Optimized data structures with 30% less memory usage
 - **🎯 Multiple Variants**: BM25Okapi, BM25Plus, and BM25L implementations
 - **🐍 Python Integration**: Seamless integration with Python via PyO3
@@ -22,12 +22,6 @@ Install from PyPI:
 
 ```bash
 pip install bm25-rs
-```
-
-Or install with development dependencies:
-
-```bash
-pip install bm25-rs[dev,benchmark]
 ```
 
 ## 🏃‍♂️ Quick Start
@@ -125,14 +119,14 @@ Memory usage: ~30% less than pure Python implementations.
 ```python
 class BM25Okapi:
     def __init__(
-        self, 
-        corpus: List[str], 
+        self,
+        corpus: List[str],
         tokenizer: Optional[Callable] = None,
-        k1: float = 1.5, 
-        b: float = 0.75, 
+        k1: float = 1.5,
+        b: float = 0.75,
         epsilon: float = 0.25
     )
-    
+
     def get_scores(self, query: List[str]) -> List[float]
     def get_batch_scores(self, query: List[str], doc_ids: List[int]) -> List[float]
     def get_top_n(self, query: List[str], documents: List[str], n: int = 5) -> List[Tuple[str, float]]
@@ -143,7 +137,7 @@ class BM25Okapi:
 ### Parameters
 
 - **k1** (float): Controls term frequency saturation (default: 1.5)
-- **b** (float): Controls length normalization (default: 0.75)  
+- **b** (float): Controls length normalization (default: 0.75)
 - **epsilon** (float): IDF normalization parameter for BM25Okapi (default: 0.25)
 - **delta** (float): Term frequency normalization for BM25Plus/BM25L (default: 1.0/0.5)
 
@@ -153,8 +147,8 @@ class BM25Okapi:
 
 ```bash
 # Clone the repository
-git clone https://github.com/dorianbrown/rank_bm25.git
-cd rank_bm25
+git clone https://github.com/amiyamandal-dev/bm25_pyrs.git
+cd bm25_pyrs
 
 # Install development dependencies
 pip install -e .[dev]
@@ -200,5 +194,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 See [CHANGELOG.md](CHANGELOG.md) for a detailed history of changes.
 
 ---
-
-**Made with ❤️ and ⚡ by the BM25-RS team**
