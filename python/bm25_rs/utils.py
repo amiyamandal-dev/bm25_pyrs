@@ -16,27 +16,27 @@ def tokenize_text(
 ) -> List[str]:
     """
     Simple text tokenization utility.
-    
+
     Args:
         text: Input text to tokenize
         lowercase: Convert to lowercase
         remove_punctuation: Remove punctuation marks
         remove_stopwords: Remove common stopwords
         stopwords: Custom stopwords list
-        
+
     Returns:
         List of tokens
     """
     if lowercase:
         text = text.lower()
-    
+
     if remove_punctuation:
         # Remove punctuation
         text = text.translate(str.maketrans('', '', string.punctuation))
-    
+
     # Split on whitespace
     tokens = text.split()
-    
+
     if remove_stopwords:
         if stopwords is None:
             # Basic English stopwords
@@ -48,9 +48,9 @@ def tokenize_text(
             }
         else:
             stopwords = set(stopwords)
-        
+
         tokens = [token for token in tokens if token not in stopwords]
-    
+
     return tokens
 
 
@@ -61,46 +61,46 @@ def preprocess_corpus(
 ) -> List[str]:
     """
     Preprocess a corpus of documents.
-    
+
     Args:
         corpus: List of document strings
         tokenizer: Custom tokenizer function
         **tokenizer_kwargs: Arguments for default tokenizer
-        
+
     Returns:
         List of preprocessed document strings
     """
     if tokenizer is None:
         tokenizer = lambda text: tokenize_text(text, **tokenizer_kwargs)
-    
+
     processed_corpus = []
     for doc in corpus:
         tokens = tokenizer(doc)
         processed_corpus.append(' '.join(tokens))
-    
+
     return processed_corpus
 
 
 def validate_corpus(corpus: List[str]) -> None:
     """
     Validate corpus format and content.
-    
+
     Args:
         corpus: List of document strings
-        
+
     Raises:
         ValueError: If corpus is invalid
     """
     if not isinstance(corpus, list):
         raise ValueError("Corpus must be a list of strings")
-    
+
     if len(corpus) == 0:
         raise ValueError("Corpus cannot be empty")
-    
+
     for i, doc in enumerate(corpus):
         if not isinstance(doc, str):
             raise ValueError(f"Document at index {i} must be a string, got {type(doc)}")
-        
+
         if len(doc.strip()) == 0:
             raise ValueError(f"Document at index {i} is empty or contains only whitespace")
 
@@ -108,19 +108,19 @@ def validate_corpus(corpus: List[str]) -> None:
 def validate_query(query: List[str]) -> None:
     """
     Validate query format.
-    
+
     Args:
         query: List of query terms
-        
+
     Raises:
         ValueError: If query is invalid
     """
     if not isinstance(query, list):
         raise ValueError("Query must be a list of strings")
-    
+
     if len(query) == 0:
         raise ValueError("Query cannot be empty")
-    
+
     for i, term in enumerate(query):
         if not isinstance(term, str):
             raise ValueError(f"Query term at index {i} must be a string, got {type(term)}")
@@ -130,7 +130,7 @@ class SimpleTokenizer:
     """
     A simple, configurable tokenizer class.
     """
-    
+
     def __init__(
         self,
         lowercase: bool = True,
@@ -142,7 +142,7 @@ class SimpleTokenizer:
     ):
         """
         Initialize the tokenizer.
-        
+
         Args:
             lowercase: Convert tokens to lowercase
             remove_punctuation: Remove punctuation from tokens
@@ -156,7 +156,7 @@ class SimpleTokenizer:
         self.remove_stopwords = remove_stopwords
         self.min_token_length = min_token_length
         self.max_token_length = max_token_length
-        
+
         if stopwords is None and remove_stopwords:
             self.stopwords = {
                 'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
@@ -166,14 +166,14 @@ class SimpleTokenizer:
             }
         else:
             self.stopwords = set(stopwords) if stopwords else set()
-    
+
     def __call__(self, text: str) -> List[str]:
         """
         Tokenize the input text.
-        
+
         Args:
             text: Input text
-            
+
         Returns:
             List of tokens
         """
@@ -192,11 +192,11 @@ def create_tokenizer(
 ) -> Callable[[str], List[str]]:
     """
     Factory function to create tokenizers.
-    
+
     Args:
         tokenizer_type: Type of tokenizer ("simple", "whitespace", "regex")
         **kwargs: Tokenizer-specific arguments
-        
+
     Returns:
         Tokenizer function
     """
@@ -207,11 +207,11 @@ def create_tokenizer(
     elif tokenizer_type == "regex":
         pattern = kwargs.get("pattern", r'\b\w+\b')
         lowercase = kwargs.get("lowercase", True)
-        
+
         def regex_tokenizer(text: str) -> List[str]:
             tokens = re.findall(pattern, text)
             return [token.lower() for token in tokens] if lowercase else tokens
-        
+
         return regex_tokenizer
     else:
         raise ValueError(f"Unknown tokenizer type: {tokenizer_type}")
