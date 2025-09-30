@@ -34,10 +34,11 @@ pub struct BM25L {
 #[pymethods]
 impl BM25L {
     #[new]
+    #[pyo3(signature = (corpus, tokenizer=None, k1=None, b=None, delta=None))]
     pub fn new(
         py: Python,
         corpus: Vec<String>,
-        tokenizer: Option<&PyAny>,
+        tokenizer: Option<Bound<PyAny>>,
         k1: Option<f64>,
         b: Option<f64>,
         delta: Option<f64>,

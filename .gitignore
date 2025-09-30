@@ -192,3 +192,4 @@ Desktop.ini
 # Local configuration
 .env.local
 .env.*.local
+*.lock

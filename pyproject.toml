@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "bm25-rs"
 version = "1.0.0"
 description = "High-performance BM25 implementation in Rust with Python bindings"
-readme = "README.md"
+readme = "readme.md"
 license = {text = "MIT"}
 authors = [
     {name = "BM25-RS Contributors", email = "maintainers@example.com"}

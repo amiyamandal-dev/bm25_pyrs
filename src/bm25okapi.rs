@@ -1,10 +1,10 @@
+use ahash::{AHashMap, AHashSet};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use ahash::{AHashMap, AHashSet};
 use smallvec::SmallVec;
-use string_interner::{StringInterner, DefaultSymbol, DefaultBackend};
 use std::sync::Arc;
+use string_interner::{DefaultBackend, DefaultSymbol, StringInterner};
 
 /// BM25Okapi structure with necessary fields - optimized version
 #[pyclass]
@@ -22,9 +22,9 @@ pub struct BM25Okapi {
     // Optimized data structures
     doc_freqs: Arc<Vec<AHashMap<DefaultSymbol, u32>>>, // Use symbols and u32 for better cache performance
     idf: Arc<AHashMap<DefaultSymbol, f64>>,            // Use AHashMap for better performance
-    doc_len: Arc<Vec<u32>>,                            // Use u32 instead of usize for better cache performance
-    interner: Arc<StringInterner<DefaultBackend>>,     // String interner for vocabulary
-    tokenizer: Option<Py<PyAny>>,                      // Optional Python tokenizer
+    doc_len: Arc<Vec<u32>>, // Use u32 instead of usize for better cache performance
+    interner: Arc<StringInterner<DefaultBackend>>, // String interner for vocabulary
+    tokenizer: Option<Py<PyAny>>, // Optional Python tokenizer
     // Precomputed values for faster scoring
     k1_plus1: f64,
     one_minus_b: f64,
@@ -34,10 +34,11 @@ pub struct BM25Okapi {
 #[pymethods]
 impl BM25Okapi {
     #[new]
+    #[pyo3(signature = (corpus, tokenizer=None, k1=None, b=None, epsilon=None))]
     pub fn new(
         py: Python,
         corpus: Vec<String>,
-        tokenizer: Option<&PyAny>,
+        tokenizer: Option<Bound<PyAny>>,
         k1: Option<f64>,
         b: Option<f64>,
         epsilon: Option<f64>,
@@ -73,7 +74,8 @@ impl BM25Okapi {
         }
 
         // Initialize structures with optimized data types
-        let (nd, doc_freqs, doc_len, avgdl) = Self::initialize_optimized(tokenized_corpus, &mut interner);
+        let (nd, doc_freqs, doc_len, avgdl) =
+            Self::initialize_optimized(tokenized_corpus, &mut interner);
 
         // Calculate IDF with optimized algorithm
         let idf_map = Self::calc_idf_optimized(nd, corpus_size, epsilon);
@@ -158,6 +160,7 @@ impl BM25Okapi {
     }
 
     /// Retrieves the top N documents for a given query, along with their scores
+    #[pyo3(signature = (query, documents, n=None))]
     pub fn get_top_n(
         &self,
         query: Vec<String>,
@@ -175,7 +178,7 @@ impl BM25Okapi {
 
         // Use optimized top-k selection for better performance
         let top_indices = crate::optimizations::select_top_k_indices(&scores, n);
-        
+
         let top_n: Vec<(String, f64)> = top_indices
             .into_iter()
             .map(|i| (documents[i].clone(), scores[i]))
@@ -185,24 +188,31 @@ impl BM25Okapi {
     }
 
     /// Optimized method to get only top N document indices (faster when you don't need the full documents)
-    pub fn get_top_n_indices(&self, query: Vec<String>, n: Option<usize>) -> PyResult<Vec<(usize, f64)>> {
+    #[pyo3(signature = (query, n=None))]
+    pub fn get_top_n_indices(
+        &self,
+        query: Vec<String>,
+        n: Option<usize>,
+    ) -> PyResult<Vec<(usize, f64)>> {
         let n = n.unwrap_or(5);
         let scores = self.get_scores(query)?;
-        
+
         let top_indices = crate::optimizations::select_top_k_indices(&scores, n);
-        
-        let result: Vec<(usize, f64)> = top_indices
-            .into_iter()
-            .map(|i| (i, scores[i]))
-            .collect();
+
+        let result: Vec<(usize, f64)> = top_indices.into_iter().map(|i| (i, scores[i])).collect();
 
         Ok(result)
     }
 
     /// Batch scoring with chunked processing for better cache performance
-    pub fn get_scores_chunked(&self, query: Vec<String>, chunk_size: Option<usize>) -> PyResult<Vec<f64>> {
+    #[pyo3(signature = (query, chunk_size=None))]
+    pub fn get_scores_chunked(
+        &self,
+        query: Vec<String>,
+        chunk_size: Option<usize>,
+    ) -> PyResult<Vec<f64>> {
         let chunk_size = chunk_size.unwrap_or(1000);
-        
+
         if self.corpus_size == 0 {
             return Ok(vec![]);
         }
@@ -365,7 +375,10 @@ impl BM25Okapi {
         }
 
         // Intern all terms at once
-        let _: Vec<_> = all_terms.iter().map(|term| interner.get_or_intern(term)).collect();
+        let _: Vec<_> = all_terms
+            .iter()
+            .map(|term| interner.get_or_intern(term))
+            .collect();
 
         // Calculate document lengths and frequencies in parallel with optimized data structures
         let doc_data: Vec<(AHashMap<DefaultSymbol, u32>, u32, AHashSet<DefaultSymbol>)> = corpus
@@ -373,7 +386,7 @@ impl BM25Okapi {
             .map(|doc| {
                 let mut freq_map = AHashMap::with_capacity(doc.len().min(64)); // Reasonable initial capacity
                 let mut unique_terms = AHashSet::with_capacity(doc.len().min(64));
-                
+
                 for term in &doc {
                     // This is safe because we pre-interned all terms
                     if let Some(symbol) = interner.get(term) {
@@ -381,7 +394,7 @@ impl BM25Okapi {
                         unique_terms.insert(symbol);
                     }
                 }
-                
+
                 (freq_map, doc.len() as u32, unique_terms)
             })
             .collect();

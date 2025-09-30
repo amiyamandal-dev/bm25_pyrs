@@ -80,13 +80,19 @@ def check_dependencies():
 def build_development():
     """Build for development."""
     print("Building for development...")
-    run_command(["maturin", "develop", "--release"])
+    env = os.environ.copy()
+    env["PYO3_USE_ABI3_FORWARD_COMPATIBILITY"] = "1"
+    result = subprocess.run(["maturin", "develop", "--release"], env=env, check=True)
+    return result
 
 
 def build_wheel():
     """Build wheel for distribution."""
     print("Building wheel...")
-    run_command(["maturin", "build", "--release"])
+    env = os.environ.copy()
+    env["PYO3_USE_ABI3_FORWARD_COMPATIBILITY"] = "1"
+    result = subprocess.run(["maturin", "build", "--release"], env=env, check=True)
+    return result
 
 
 def build_sdist():

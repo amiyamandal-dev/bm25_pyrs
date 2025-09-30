@@ -7,7 +7,7 @@ mod optimizations;
 
 /// A Python module implemented in Rust.
 #[pymodule]
-pub fn _bm25_rs(_py: Python, m: &PyModule) -> PyResult<()> {
+pub fn _bm25_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<bm25okapi::BM25Okapi>()?;
     m.add_class::<bm25plus::BM25Plus>()?;
     m.add_class::<bm25l::BM25L>()?;
